@@ -396,7 +396,7 @@ const nounL = (n) => `${n[0]} <b>${n[1]}</b>`;
 function symItem(what, correct, pool, names) {
   const others = R.shuffle([...new Set(pool.filter((p) => p !== correct))]).slice(0, 3);
   const opts = R.shuffle([correct, ...others]);
-  return { ph: "trad", type: "choice", q: `Na figura, qual símbolo representa ${what}?`, opts: opts.map((o) => sy(o, names)), ans: opts.indexOf(correct),
+  return { ph: "trad", type: "choice", q: `Na figura, qual símbolo representa ${what}?`, opts: opts.map((o) => sy(o, names)), ans: opts.indexOf(correct), ids: opts, symNames: names,
     why: `${what[0].toUpperCase() + what.slice(1).replace(/<\/?b>/g, "")} é representado por ${sy(correct, names)} no modelo.` };
 }
 
@@ -432,7 +432,7 @@ function readItem(sent, tag, q, why) {
   const strip = (h) => { const t = h.replace(/<[^>]+>/g, ""); return t.length > 120 ? t.slice(0, 117) + "…" : t; };
   const others = R.shuffle(sent.filter((s) => s !== tgt && s.tag !== "plain-skip")).slice(0, 3);
   const opts = R.shuffle([tgt, ...others]);
-  return I.choice("ler", q, opts.map((s) => `“${strip(s.t)}”`), opts.indexOf(tgt), why);
+  return { ...I.choice("ler", q, opts.map((s) => `“${strip(s.t)}”`), opts.indexOf(tgt), why), rtag: tag };
 }
 function genEx(fam, o) {
   const ex = { id: "g" + (++GEN_SEQ), gen: true, fam, n: "Novo", src: "Mecanismo sorteado", derived: [], names: {}, ...o };
@@ -1727,11 +1727,11 @@ function moldFigura(ex) {
     for (const alt of R.shuffle(ex.flags[n].opts.filter((o) => o !== ex.flags[n].v))) {
       const v = genWith(ex.fam, ex.seed, { [n]: alt });
       if (v.figSVG !== ex.figSVG && v.statement !== ex.statement && !vars.some((x) => x.figSVG === v.figSVG)) vars.push(v);
-      if (vars.length >= 2) break;
+      if (vars.length >= 3) break;
     }
-    if (vars.length >= 2) break;
+    if (vars.length >= 3) break;
   }
-  if (vars.length < 2) return null;
+  if (vars.length < 3) return null;
   const small = (svg) => `<span class="figopt">${svg}</span>`;
   return { ph: "ler", mold: "figura", tpl: "figura", type: "choice", noFig: true, q: "Leia o enunciado ao lado. <b>Qual figura corresponde a ele?</b>", opts: [ex.figSVG, ...vars.map((v) => v.figSVG)].map(small), ans: 0,
     why: "As outras figuras mudam um detalhe que o enunciado fixa (convenção, apoio, direção, peça a mais ou a menos). Ler o texto inteiro antes de olhar a figura evita essa troca.", hint: "Procure no texto: o que se move, em que direção, de onde cada ângulo é medido e onde estão as molas e a força." };
@@ -1774,18 +1774,20 @@ function moldEse(ex) {
   return null;
 }
 function addMolds(ex, kinds = MOLDS) {
-  const add = (it) => { if (!it) return; it.tpl = ex.fam + ":" + it.tpl; ex.items.push(it); };
+  const add = (it) => { if (!it) return; if (!it.generic) it.tpl = ex.fam + ":" + it.tpl; ex.items.push(it); };
   const want = (k) => kinds.includes(k);
   if (want("erro")) try { add(moldErro(ex)); } catch (e) {}
   if (want("figura")) try { add(moldFigura(ex)); } catch (e) {}
   if (want("acopla") || want("mij")) try { moldAcopla(ex).forEach(add); } catch (e) {}
   if (want("ese")) try { add(moldEse(ex)); } catch (e) {}
+  if (want("conc")) try { addConc(ex).forEach(add); } catch (e) {}
   return ex;
 }
 
 /* ---------- dificuldade real ---------- */
 const FLAG_HARD = { chainRel: true, cartRel: true, cupRel: true, wingRel: true, wingRoll: true, cupUp: true, foilConv: "cg", barConv: ["ref", "two"], shaftConv: "two", pendVert: true };
 function difficulty(it, ex) {
+  if (it.diff !== undefined) return it.diff;
   if (it.mold === "figura") return 4;
   if (it.mold === "acopla") return 4.5;
   if (it.mold === "ese") return 6.5;
@@ -1816,6 +1818,135 @@ function jaCaiu(ex) {
 }
 const eggHTML = (ex) => (jaCaiu(ex) ? `<button class="egg" type="button" aria-label="Pista sobre este mecanismo" aria-expanded="false">★</button><span class="eggtxt" hidden>Esse tipo de mecanismo já apareceu no curso, em prova, teste ou lista.</span>` : "");
 function bindEgg(root) { root.querySelectorAll(".egg").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); const t = b.nextElementSibling; t.hidden = !t.hidden; b.setAttribute("aria-expanded", String(!t.hidden)); })); }
+
+// Perguntas de conceito (v6): variam o ângulo das perguntas fáceis. Umas saem do mecanismo sorteado
+// (classe de cada parâmetro, contagens, lista de coordenadas), outras são gerais (fórmulas de energia, Lagrange).
+// Todas são de múltipla escolha com 4 alternativas. Só o Show usa estas perguntas (addConc, em moldes.js).
+
+function conceptClasses(ex) {
+  const its = ex.items.filter((i) => i.type === "expr" && !i.mold);
+  const P = new Set(ex.params), uq = (a) => [...new Set(a.filter(Boolean))];
+  const coefs = (ph) => uq(its.filter((i) => i.ph === ph && i.coef).map((i) => (P.has(i.coef) ? i.coef : null)));
+  const spring = coefs("V"), damper = coefs("D"), tc = coefs("T");
+  const mass = tc.filter((c) => /^[mM]/.test(c)), inertia = tc.filter((c) => /^J/.test(c));
+  const force = uq(its.filter((i) => i.ph === "Q").flatMap((i) => [...varsOf(parse(i.ans))]).filter((v) => P.has(v) && /^(F|M0|T0)$/.test(v)));
+  const imposed = ex.params.filter((p) => /^z\d*$/.test(p) || (ex.fam === "carts" && p === "y"));
+  const known = new Set([...spring, ...damper, ...mass, ...inertia, ...force, ...imposed, "g"]);
+  const length = ex.params.filter((p) => !known.has(p) && !/^[kcmMJ]/.test(p) && p !== "yd");
+  return { spring, damper, mass, inertia, force, imposed, length, nT: its.filter((i) => i.ph === "T").length };
+}
+// uma alternativa errada de cada grupo, depois completa (sem repetir)
+function pickWrong(right, groups, n = 3) {
+  const gs = R.shuffle(groups.map((g) => R.shuffle(g.filter((x) => x !== right))).filter((g) => g.length));
+  const out = [];
+  for (let r = 0; out.length < n && r < 4; r++) gs.forEach((g) => { if (out.length < n && g[r] !== undefined && !out.includes(g[r])) out.push(g[r]); });
+  return out.length === n ? out : null;
+}
+const CTAG = (id) => "conc:" + id;
+function symQ(ex, id, ph, diff, q, right, groups, why, hint, extra = {}) {
+  const w = pickWrong(right, groups); if (!w) return null;
+  const opts = R.shuffle([right, ...w]);
+  return { ph, mold: "conc", tpl: CTAG(id), diff, type: "choice", q, opts: opts.map((o) => nameHTML(o, ex)), ans: opts.indexOf(right), why, hint, ...extra };
+}
+function countQ(id, diff, q, n, cands, why, hint, extra = {}) {
+  if (n < 1) return null;
+  const pool = [...new Set([...R.shuffle(cands), n + 1, n + 2, n - 1, n + 3, n - 2])].filter((x) => x >= 1 && x !== n);
+  const opts = R.shuffle([n, ...pool.slice(0, 3)].map(String));
+  return { ph: "mec", mold: "conc", tpl: CTAG(id), diff, type: "choice", q, opts, ans: opts.indexOf(String(n)), why, hint, ...extra };
+}
+function textQ(id, ph, diff, q, right, wrongs, why, hint, extra = {}) {
+  const opts = R.shuffle([right, ...wrongs]);
+  return { ph, mold: "conc", tpl: CTAG(id), diff, type: "choice", q, opts, ans: opts.indexOf(right), why, hint, ...extra };
+}
+
+/* ---------- perguntas gerais (não dependem da figura) ---------- */
+const i_ = (b, s) => `<i>${b}</i>${s ? `<sub>${s}</sub>` : ""}`;
+const GENERAL = () => {
+  const G = { generic: true };
+  const m = i_("m"), v = i_("v"), k = i_("k"), c = i_("c"), J = i_("J"), w = "<i>ω</i>", Dl = "Δ", F = i_("F");
+  return [
+    textQ("g-T", "T", 0.5, `A energia cinética de uma massa ${m} que só translada com velocidade ${v} é:`, `½ ${m} ${v}²`, [`${m} ${v}²`, `½ ${m} ${v}`, `½ ${m}² ${v}`], `A massa entra em T como ½ ${m} ${v}²: metade da massa vezes a velocidade ao quadrado.`, "Pense na energia que se perde ao frear a massa: cresce com o quadrado da velocidade, com um ½.", G),
+    textQ("g-V", "V", 0.5, `Uma mola de rigidez ${k}, deformada de ${Dl}, armazena a energia:`, `½ ${k} ${Dl}²`, [`${k} ${Dl}²`, `½ ${k} ${Dl}`, `½ ${k}² ${Dl}`], `A energia da mola é ½ ${k} ${Dl}²: a força ${k}${Dl} integrada ao longo da deformação.`, "A força da mola cresce com Δ; a energia é a área sob essa reta.", G),
+    textQ("g-D", "D", 1, `A função de dissipação de um amortecedor ${c}, cuja deformação varia com taxa ${Dl}̇, é:`, `½ ${c} ${Dl}̇²`, [`${c} ${Dl}̇²`, `½ ${c} ${Dl}̇`, `½ ${c}² ${Dl}̇`], `D = ½ ${c} ${Dl}̇²: tem a mesma forma de V, com a velocidade da deformação no lugar da deformação.`, "D imita V: troque a deformação pela sua taxa.", G),
+    textQ("g-rot", "T", 0.5, `Um disco de inércia ${J} gira com velocidade angular ${w}. Sua energia cinética é:`, `½ ${J} ${w}²`, [`${J} ${w}²`, `½ ${J} ${w}`, `½ ${J}² ${w}`], `A rotação entra em T como ½ ${J} ${w}², o análogo de ½ ${m} ${v}².`, "É igual à translação, trocando m por J e v por ω.", G),
+    textQ("g-wv", "Q", 1, `O trabalho virtual de uma força ${F} sobre um deslocamento virtual δ${i_("x")} (mesma direção) é:`, `${F} δ${i_("x")}`, [`½ ${F} δ${i_("x")}`, `${F} δ${i_("x")}²`, `${F} / δ${i_("x")}`], `δW = ${F} δ${i_("x")}. Em Lagrange, Q é o coeficiente de δq em δW.`, "Força vezes deslocamento: sem ½, porque a força é dada e não varia com o deslocamento virtual.", G),
+    textQ("g-lag", "T", 3, "A equação de Lagrange para a coordenada <i>q</i><sub>i</sub>, com T, V, D e Q, é:", "d/dt(∂T/∂<i>q̇</i><sub>i</sub>) − ∂T/∂<i>q</i><sub>i</sub> + ∂V/∂<i>q</i><sub>i</sub> + ∂D/∂<i>q̇</i><sub>i</sub> = <i>Q</i><sub>i</sub>",
+      ["d/dt(∂T/∂<i>q̇</i><sub>i</sub>) + ∂T/∂<i>q</i><sub>i</sub> + ∂V/∂<i>q</i><sub>i</sub> + ∂D/∂<i>q̇</i><sub>i</sub> = <i>Q</i><sub>i</sub>", "d/dt(∂T/∂<i>q̇</i><sub>i</sub>) − ∂T/∂<i>q</i><sub>i</sub> − ∂V/∂<i>q</i><sub>i</sub> + ∂D/∂<i>q̇</i><sub>i</sub> = <i>Q</i><sub>i</sub>", "d/dt(∂T/∂<i>q̇</i><sub>i</sub>) − ∂T/∂<i>q</i><sub>i</sub> + ∂V/∂<i>q̇</i><sub>i</sub> + ∂D/∂<i>q</i><sub>i</sub> = <i>Q</i><sub>i</sub>"],
+      "T e V derivam em relação à coordenada, D em relação à velocidade; o termo ∂T/∂q entra com sinal negativo.", "Sinal de ∂T/∂q é menos; V deriva em q, D deriva em q̇.", G),
+    textQ("g-peso", "V", 1.5, `Medindo os deslocamentos a partir do equilíbrio estático, o que acontece com o peso ${m}${i_("g")}?`, "Cancela com a pré-carga das molas e sai de V", ["Entra em V como uma força extra, sempre", "Vira um amortecimento equivalente", "Dobra o valor de T"], "No equilíbrio estático o peso é equilibrado pela pré-carga das molas: os dois se cancelam e V fica só com ½ k Δ².", "Pergunte quem segura o peso na posição de equilíbrio.", G),
+    textQ("g-damp", "D", 0.5, "A força de um amortecedor viscoso é proporcional a:", "velocidade relativa entre as pontas", ["deslocamento relativo entre as pontas", "aceleração das pontas", "massa que ele sustenta"], "O amortecedor reage à taxa de variação da deformação: F = c Δ̇.", "Se a mola reage ao deslocamento, o amortecedor reage a quê?", G),
+    textQ("g-mola", "V", 0.5, "A força de uma mola linear é proporcional a:", "deformação (alongamento ou encurtamento)", ["velocidade da deformação", "aceleração da massa ligada", "quadrado da velocidade"], "Mola linear: F = k Δ.", "Lei de Hooke.", G),
+    textQ("g-Q", "Q", 2, `Em Lagrange, a força generalizada ${i_("Q", "i")} é obtida:`, `como o coeficiente de δ${i_("q", "i")} no trabalho virtual δW`, [`derivando T em relação a ${i_("q", "i")}`, "somando as massas do sistema", `derivando V em relação a ${i_("q̇", "i")}`], `δW = Q₁δq₁ + Q₂δq₂ + …: cada Q é o que multiplica seu δq.`, "Escreva δW para um deslocamento virtual δq e agrupe por coordenada.", G),
+    textQ("g-small", "pos", 1.5, `Para rotações pequenas, o deslocamento vertical de um ponto a uma distância ${i_("d")} da referência, numa barra que gira ${"<i>θ</i>"}, é:`, `${i_("y", "ref")} + ${i_("d")} ${"<i>θ</i>"}`, [`${i_("y", "ref")} + ${i_("d")} ${"<i>θ</i>"}²`, `${i_("y", "ref")} · ${i_("d")} ${"<i>θ</i>"}`, `${i_("y", "ref")} + ${i_("d")} / ${"<i>θ</i>"}`], "Para θ pequeno, sen θ ≈ θ: o ponto sobe d·θ além do deslocamento da referência.", "Pequenas rotações: sen θ ≈ θ.", G),
+    textQ("g-Mcross", "T", 3, `Se T tem um termo cruzado em ${i_("q̇", "1")}${i_("q̇", "2")}, a matriz [M] é:`, "acoplada: M₁₂ = M₂₁ ≠ 0", ["diagonal: M₁₂ = 0", "antissimétrica: M₁₂ = −M₂₁", "sem inversa"], "Termo cruzado em T vira elemento fora da diagonal de [M]: M₁₂ = ∂²T/∂q̇₁∂q̇₂.", "Fora da diagonal ⇒ acoplamento.", G),
+    textQ("g-Kcross", "V", 3, "Se uma mola tem deformação que depende de <i>q</i><sub>1</sub> e de <i>q</i><sub>2</sub>, a matriz [K] fica:", "acoplada: K₁₂ ≠ 0", ["diagonal: K₁₂ = 0", "nula", "igual a [M]"], "A mola contribui com k·(∂Δ/∂q₁)(∂Δ/∂q₂) para K₁₂: aparece fora da diagonal.", "K_ij soma, mola a mola, k·(∂Δ/∂qᵢ)(∂Δ/∂qⱼ).", G),
+    textQ("g-imp", "mec", 1.5, "Um movimento imposto, como o deslocamento da pista <i>z</i>(<i>t</i>), conta como coordenada generalizada?", "Não: é um dado do problema, entra como excitação", ["Sim: ganha uma equação de movimento", "Sim, mas só em T", "Só se tiver massa"], "Quem não tem liberdade própria não é grau de liberdade. z(t) é dado e aparece na deformação do pneu.", "Pergunte se o sistema decide esse movimento ou se ele vem imposto.", G),
+  ];
+};
+const GL_BASIC = [
+  ["Uma massa presa a um trilho horizontal, que só anda em x, tem quantos graus de liberdade?", 1],
+  ["Um corpo rígido que se move livremente no plano tem quantos graus de liberdade?", 3],
+  ["Uma barra rígida articulada num pino fixo, girando no plano, tem quantos graus de liberdade?", 1],
+  ["Uma barra rígida que só sobe e gira, apoiada em duas molas verticais, tem quantos graus de liberdade?", 2],
+  ["Duas massas livres para andar na mesma reta, ligadas por uma mola, têm quantos graus de liberdade?", 2],
+  ["Um pêndulo simples (massa na ponta de haste rígida, pino fixo) oscilando no plano tem quantos graus de liberdade?", 1],
+  ["Três massas em fila, cada uma livre para andar na horizontal, têm quantos graus de liberdade?", 3],
+];
+
+/* ---------- perguntas ligadas ao mecanismo sorteado ---------- */
+const UNITS = ["kg", "kg·m²", "N", "N·m", "N/m", "N·s/m", "m/s²", "rad"];
+function addConc(ex) {
+  const K = conceptClasses(ex), n = ex.coords.length, out = [];
+  const push = (it) => { if (it) out.push(it); };
+  const nm = (id) => nameHTML(id, ex), plain = { plain: true, noLegend: true };
+  const oth = (...g) => g;
+  push(K.spring.length && symQ(ex, "sym-mola", "trad", 0.5, "Qual destes parâmetros é uma <b>constante de mola</b>?", R.pick(K.spring), oth(K.mass, K.inertia, K.damper, K.force, K.length, ["g"]), "Constante de mola é a rigidez: entra em V como ½ k Δ².", "Mola: rigidez. Procure o parâmetro que multiplica a deformação ao quadrado em V."));
+  push(K.damper.length && symQ(ex, "sym-amort", "trad", 0.7, "Qual destes parâmetros é um <b>coeficiente de amortecimento</b>?", R.pick(K.damper), oth(K.mass, K.inertia, K.spring, K.force, K.length), "Coeficiente de amortecimento: entra em D como ½ c Δ̇².", "Amortecedor: o que multiplica a velocidade da deformação."));
+  push(K.mass.length + K.inertia.length && symQ(ex, "sym-massa", "trad", 0.6, "Qual destes parâmetros é uma <b>massa ou um momento de inércia</b>?", R.pick([...K.mass, ...K.inertia]), oth(K.spring, K.damper, K.force, K.length, ["g"]), "Massa e inércia são os parâmetros de T: ½ m v² e ½ J ω².", "São os parâmetros que aparecem na energia cinética."));
+  push(K.force.length && symQ(ex, "sym-carga", "trad", 1.2, "Qual destes parâmetros é a <b>carga externa</b> (força ou momento aplicado)?", R.pick(K.force), oth(K.mass, K.inertia, K.spring, K.damper, K.length), "A carga externa é a excitação: ela gera Q, por meio de δW.", "É o que empurra o sistema de fora."));
+  push(K.mass.length + K.inertia.length && symQ(ex, "em-T", "T", 1.8, "Qual destes parâmetros aparece na <b>energia cinética T</b>?", R.pick([...K.mass, ...K.inertia]), oth(K.spring, K.damper, K.force), "T só tem massas e inércias: ½ m v² e ½ J ω².", "Rigidez, amortecimento e carga não entram na energia cinética."));
+  push(K.spring.length && symQ(ex, "em-V", "V", 1.8, "Qual destes parâmetros aparece na <b>energia potencial elástica V</b>?", R.pick(K.spring), oth(K.damper, K.force, K.inertia, ex.params.includes("g") ? [] : K.mass), "V (elástica) só tem rigidezes: ½ k Δ².", "Pense em quem armazena energia ao ser deformado."));
+  push(K.damper.length && symQ(ex, "em-D", "D", 1.8, "Qual destes parâmetros aparece na <b>função de dissipação D</b>?", R.pick(K.damper), oth(K.spring, K.mass, K.inertia, K.force), "D só tem amortecimentos: ½ c Δ̇².", "Quem dissipa energia?"));
+  push(K.force.length && symQ(ex, "em-Q", "Q", 2, "Qual destes parâmetros aparece na <b>força generalizada Q</b>?", R.pick(K.force), oth(K.spring, K.damper, K.mass, K.inertia), "Q vem do trabalho virtual da carga externa: só ela aparece.", "Q é calculada a partir de δW, que só tem cargas externas."));
+  push(K.spring.length && countQ("n-molas", 1, "Quantas <b>constantes de mola diferentes</b> aparecem no modelo?", K.spring.length, [K.damper.length, K.mass.length + K.inertia.length, n], `Os parâmetros de mola são: ${K.spring.map(nm).join(", ")}.`, "Percorra o enunciado e a figura procurando molas (de translação ou de torção)."));
+  push(K.damper.length && countQ("n-amort", 1.2, "Quantos <b>coeficientes de amortecimento diferentes</b> aparecem no modelo?", K.damper.length, [K.spring.length, K.mass.length + K.inertia.length, n], `Os amortecimentos são: ${K.damper.map(nm).join(", ")}.`, "Procure amortecedores (êmbolo) na figura e no texto."));
+  push(K.mass.length + K.inertia.length > 1 && countQ("n-massas", 1.2, "Quantos <b>parâmetros de inércia diferentes</b> (massas e momentos de inércia) aparecem em T?", K.mass.length + K.inertia.length, [K.spring.length, n, K.nT], `Os parâmetros de T são: ${[...K.mass, ...K.inertia].map(nm).join(", ")}.`, "Cada corpo com massa ou inércia própria traz um parâmetro."));
+  // contar o mínimo de equações: sem legenda azul e com armadilhas (movimento imposto, peças sem massa)
+  const nz = K.imposed.length, trap = [n + nz, K.nT, K.spring.length, n + 1, n - 1];
+  push(countQ("n-eq", 2.2, "Quantas <b>equações de movimento</b> o modelo terá (uma por grau de liberdade)?", n, trap, `${n} coordenadas independentes: ${ex.coords.map(nm).join(", ")}.${nz ? " O movimento imposto não conta." : ""}`, "Conte só os movimentos independentes que o sistema decide. Dados impostos e peças sem massa não contam.", plain));
+  if (n >= 2) {
+    const sz = (a, b) => `${a} × ${b}`;
+    push(textQ("mat-tam", "mec", 2.4, "Qual o tamanho das matrizes [M], [C] e [K]?", sz(n, n), [sz(n + 1, n + 1), sz(n, 1), sz(1, n), ...(n > 2 ? [sz(n - 1, n - 1)] : [sz(n + 2, n + 2)])].slice(0, 3), `Uma linha e uma coluna por grau de liberdade: ${n} × ${n}.`, "Uma equação por coordenada, e cada equação envolve todas as coordenadas.", plain));
+  }
+  // coordenadas: qual lista é a correta
+  {
+    const dados = [...K.imposed, ...K.force, ...K.length.slice(0, 2)];
+    const wrong = new Set(), nmList = (a) => a.map(nm).join(", "), right = nmList(ex.coords);
+    if (dados.length) { const d = R.pick(dados); wrong.add(nmList([...ex.coords, d])); const i = R.int(0, n - 1); wrong.add(nmList(ex.coords.map((c, k) => (k === i ? d : c)))); }
+    if (n >= 2) wrong.add(nmList(ex.coords.slice(0, -1)));
+    if (n >= 3) wrong.add(nmList(ex.coords.slice(1)));
+    if (K.imposed.length) wrong.add(nmList([...ex.coords.slice(0, -1), K.imposed[0]]));
+    wrong.delete(right);
+    if (wrong.size >= 3) push(textQ("lista-coord", "mec", 2.8, "Quais são as <b>coordenadas generalizadas</b> deste modelo?", right, R.shuffle([...wrong]).slice(0, 3), `As coordenadas são ${right}: os movimentos independentes. Dados impostos, cargas e comprimentos não são coordenadas.`, "Releia o enunciado: ele diz quais deslocamentos e rotações usar. O que é imposto ou aplicado de fora não entra.", plain));
+  }
+  push(symQ(ex, "e-coord", "mec", 1.5, "Qual destes símbolos é uma <b>coordenada generalizada</b> do modelo?", R.pick(ex.coords), oth(K.force, K.imposed, K.spring, K.mass, K.length), "Coordenada é o deslocamento ou a rotação que o sistema decide sozinho.", "Os outros são parâmetros ou dados: não variam por decisão do sistema.", plain));
+  if (n >= 3 && K.imposed.length + K.force.length) {
+    const right = R.pick([...K.imposed, ...K.force]);
+    push(symQ(ex, "nao-coord", "mec", 2, "Qual destes símbolos <b>não</b> é coordenada, e sim um dado do problema?", right, oth(ex.coords), "Excitações (cargas e movimentos impostos) vêm do enunciado: não ganham equação.", "Três deles são deslocamentos ou rotações que o sistema decide.", plain));
+  }
+  // unidades
+  {
+    const cand = [...K.mass.map((p) => [p, "kg"]), ...K.inertia.map((p) => [p, "kg·m²"]), ...K.force.map((p) => [p, p === "F" ? "N" : "N·m"])];
+    if (cand.length) {
+      const [p, u] = R.pick(cand), opts = R.shuffle([u, ...R.shuffle(UNITS.filter((x) => x !== u)).slice(0, 3)]);
+      push({ ph: "trad", mold: "conc", tpl: CTAG("unidade"), diff: 1.2, type: "choice", q: `Qual a unidade de ${nm(p)} no SI?`, opts, ans: opts.indexOf(u), why: `${nm(p)} é ${u === "kg" ? "massa" : u === "kg·m²" ? "momento de inércia" : u === "N" ? "força" : "momento"}: ${u}.`, hint: "Pense na grandeza física: massa, inércia, força ou momento.", plain: false });
+    }
+  }
+  // gerais
+  GENERAL().forEach(push);
+  { const [q, a] = R.pick(GL_BASIC); const opts = ["1", "2", "3", "4"]; push({ ph: "mec", mold: "conc", tpl: CTAG("gl-basico"), diff: 0.8, type: "choice", q, opts, ans: opts.indexOf(String(a)), why: `Conte os movimentos independentes: ${a}.`, hint: "Quantos números bastam para dizer onde está tudo?", generic: true }); }
+  return out;
+}
 
 // Som do Show da Vibração: tudo sintetizado com Web Audio (nenhum arquivo). O AudioContext nasce no
 // primeiro toque do jogador; sem áudio (ou com erro) o jogo segue mudo. store.mute guarda o mudo.
@@ -1905,13 +2036,13 @@ const LADDER = [1e3, 2e3, 3e3, 4e3, 5e3, 1e4, 2e4, 3e4, 4e4, 5e4, 1e5, 2e5, 3e5,
 const money = (v) => (v >= 1e6 ? "R$ 1 milhão" : v >= 1e3 ? `R$ ${String(v / 1e3).replace(".", ",")} mil` : `R$ ${v}`);
 // Cada degrau pede certos tipos de pergunta (fase ou molde) e uma dificuldade-alvo (difficulty em moldes.js).
 const LEVELS = [
-  { k: ["trad"], d: 0 }, { k: ["ler", "trad"], d: 1 }, { k: ["mec", "number"], d: 1.5 }, { k: ["number", "match", "mec"], d: 2.5 },
-  { k: ["acopla", "figura"], d: 4 }, { k: ["pos", "V"], d: 3.5 }, { k: ["figura", "acopla", "pos"], d: 4.5 }, { k: ["T", "V", "D", "pos"], d: 5 },
+  { k: ["trad", "conc"], d: 0.2 }, { k: ["ler", "trad", "conc"], d: 1 }, { k: ["mec", "number", "conc"], d: 1.8 }, { k: ["number", "match", "mec", "conc"], d: 2.6 },
+  { k: ["acopla", "figura", "conc"], d: 3.8 }, { k: ["pos", "V"], d: 3.5 }, { k: ["figura", "acopla", "pos"], d: 4.5 }, { k: ["T", "V", "D", "pos"], d: 5 },
   { k: ["erro", "ese"], d: 6 }, { k: ["T", "Q", "pos"], d: 6 }, { k: ["ese", "erro", "mij"], d: 6.5 }, { k: ["Q", "T", "mij"], d: 7 },
   { k: ["pos", "T", "V", "Q"], d: 6 }, { k: ["T", "Q", "pos", "V"], d: 6.8 }, { k: ["T", "Q", "mij"], d: 7.5 }, { k: ["T", "Q", "mij"], d: 9 },
 ];
-const TYPED_FROM = 12; // R$ 300 mil em diante: resposta digitada
-const MOLDS = ["erro", "figura", "acopla", "mij", "ese"];
+const TYPED_FROM = 99; // v6: o Show é só múltipla escolha (a resposta digitada ficou no Treino por fase)
+const MOLDS = ["erro", "figura", "acopla", "mij", "ese", "conc"];
 
 /* ---------- alternativas erradas ---------- */
 const clone = (a) => JSON.parse(JSON.stringify(a));
@@ -2054,16 +2185,58 @@ function pack(item, ex, good, wrong) {
   const opts = R.shuffle([good, ...wrong]);
   return { opts: opts.map((a) => `<span class="ans">${item.lhs} ${pp(a, ex)}</span>`), ans: opts.indexOf(good), n: opts.length, asts: opts };
 }
+/* texto em notação usual: M_ij, x_A, ẏ_1 viram subscritos (fora das tags) */
+const FM = (h) => String(h).split(/(<[^>]+>)/).map((s, i) => (i % 2 ? s : s.replace(/([A-Za-zθφωΔẋẏẍÿ][̀-ͯ]*)_([A-Za-z0-9]+)/g, "$1<sub>$2</sub>"))).join("");
+const strip1 = (h) => { const t = h.replace(/<[^>]+>/g, ""); return t.length > 120 ? t.slice(0, 117) + "…" : t; };
+// completa "Qual trecho…" com frases de outro mecanismo (de outra etiqueta, para não dizer a mesma coisa)
+function padLer(item, opts) {
+  const out = opts.slice();
+  for (let t = 0; t < 10 && out.length < 4; t++) {
+    const o = genWith(R.pick(Object.keys(GEN)), Math.floor(R.rnd() * 2 ** 31));
+    R.shuffle(o.sent.filter((s) => s.tag !== item.rtag && s.tag !== "plain-skip")).forEach((s) => { const q = `“${strip1(s.t)}”`; if (out.length < 4 && !out.includes(q)) out.push(q); });
+  }
+  return out;
+}
+// completa "Qual símbolo…" com símbolos de outra classe (letra inicial diferente)
+function padSym(item, ex) {
+  const have = item.ids.slice(), correct = item.ids[item.ans], out = item.opts.slice();
+  const cand = R.shuffle([...ex.params, ...ex.coords].filter((p) => !have.includes(p) && p[0].toLowerCase() !== correct[0].toLowerCase()));
+  for (const p of cand) { if (out.length >= 4) break; if (!have.some((h) => h[0].toLowerCase() === p[0].toLowerCase())) { have.push(p); out.push(sy(p, item.symNames)); } }
+  return out;
+}
 function mcOf(item, ex) {
+  const m = mcRaw(item, ex);
+  m.q = FM(m.q); m.why = FM(m.why); m.hint = FM(m.hint); m.opts = m.opts.map(FM);
+  return m;
+}
+// graus de liberdade: alternativas com os erros típicos de contagem (somar o movimento imposto, contar peças sem massa…)
+function glOptions(item, ex) {
+  const n = item.ans, imp = ex.params.filter((p) => /^z\d*$/.test(p) || (ex.fam === "carts" && p === "y")).length;
+  const nT = ex.items.filter((i) => i.type === "expr" && i.ph === "T" && !i.mold).length, nV = ex.items.filter((i) => i.type === "expr" && i.ph === "V" && !i.mold).length;
+  const pool = R.shuffle([n + imp, nT, nV, n + 1, n - 1, n + 2, n - 2, n + 3]).filter((x, i, a) => x >= 1 && x !== n && a.indexOf(x) === i);
+  // metade das vezes a certa fica numa ponta (a mediana não entrega a resposta)
+  let pick = pool.slice(0, 3);
+  if (R.chance(0.5)) {
+    const all = [...new Set([...pool, n + 1, n + 2, n + 3, n + 4, n - 1, n - 2, n - 3])].filter((x) => x >= 1 && x !== n);
+    const sides = R.shuffle([all.filter((x) => x > n), all.filter((x) => x < n)]).filter((s) => s.length >= 3);
+    if (sides.length) pick = sides[0].sort((x, y) => (pool.includes(y) ? 1 : 0) - (pool.includes(x) ? 1 : 0)).slice(0, 3);
+  }
+  const o = R.shuffle([n, ...pick]);
+  return { opts: o.map(String), ans: o.indexOf(n) };
+}
+function mcRaw(item, ex) {
   const base = { q: item.q, why: item.why, hint: item.hint || hintFor(item), ph: item.ph };
   if (item.type === "choice") {
     let idx = item.opts.map((_, i) => i);
     if (idx.length > 4) idx = [item.ans, ...R.shuffle(idx.filter((i) => i !== item.ans)).slice(0, 3)];
     idx = R.shuffle(idx);
-    return { ...base, opts: idx.map((i) => item.opts[i]), ans: idx.indexOf(item.ans) };
+    let opts = idx.map((i) => item.opts[i]), ans = idx.indexOf(item.ans);
+    if (opts.length < 4 && item.ph === "ler" && item.rtag) { const right = opts[ans]; opts = R.shuffle(padLer(item, opts)); ans = opts.indexOf(right); }
+    if (opts.length < 4 && item.ph === "trad" && item.ids) { const right = opts[ans]; opts = R.shuffle(padSym(item, ex)); ans = opts.indexOf(right); }
+    return { ...base, opts, ans };
   }
   if (item.type === "number") {
-    // janela de 4 inteiros com a certa em posição sorteada (a mediana não entrega a resposta)
+    if (ex.gen) { const g = glOptions(item, ex); return { ...base, ...g }; }
     const n = item.ans, lo = n - R.int(0, Math.min(3, n - 1)), o = R.shuffle([lo, lo + 1, lo + 2, lo + 3]);
     return { ...base, opts: o.map(String), ans: o.indexOf(n) };
   }
@@ -2081,7 +2254,7 @@ function mcOf(item, ex) {
    store.seen guarda as últimas assinaturas família:contexto:molde (entre partidas) e pesa contra repetir. */
 let SH = null;
 const SEEN_MAX = 60;
-const sigOf = (ex, it) => `${ex.fam}:${ex.ctx}:${it.tpl}`;
+const sigOf = (ex, it) => (it.generic ? it.tpl : `${ex.fam}:${ex.ctx}:${it.tpl}`);
 function startShow() {
   S = null;
   SH = { L: 0, hist: [], used: new Set(), sigs: [], help: { pular: 3, cartas: 1, univ: 1, placas: 1 }, log: [], cur: null };
@@ -2113,14 +2286,14 @@ function pickItem(L, avoid) {
     for (const it of ex.items) {
       if (!lv.k.includes(kindOf(it)) || it === avoid || SH.used.has(it.tpl) || (typed && it.type !== "expr")) continue;
       const i = seen.lastIndexOf(sigOf(ex, it)), gap = Math.abs(difficulty(it, ex) - lv.d);
-      const sc = gap + (i < 0 ? 0 : 1.5 * (1 + i / SEEN_MAX)) + Math.random() * 0.8;
+      const sc = gap + (i < 0 ? 0 : 1.5 * (1 + i / SEEN_MAX)) + (it.mold === "conc" ? 0.3 : 0) + Math.random() * 0.8;
       if (best && sc >= best.sc) continue;
       const mc = mk(it, ex);
-      if (!typed && it.type === "expr" && mc.opts.length < 4) continue;
+      if (mc.opts.length !== 4) continue;
       best = { ex, item: it, mc, sc, gap };
     }
   }
-  if (!best) { const ex = showEx([]), it = R.pick(ex.items.filter((x) => x.type === "expr")); best = { ex, item: it, mc: mk(it, ex) }; }
+  for (let t = 0; !best && t < 40; t++) { const ex = showEx([]), it = R.pick(ex.items.filter((x) => x.type === "expr")), mc = mk(it, ex); if (mc.opts.length === 4) best = { ex, item: it, mc }; }
   SH.used.add(best.item.tpl); SH.hist.push({ fam: best.ex.fam, ctx: best.ex.ctx });
   try { store.seen = seen.concat([sigOf(best.ex, best.item)]).slice(-SEEN_MAX); save(); } catch (e) {}
   return { ex: best.ex, item: best.item, mc: best.mc };
@@ -2132,7 +2305,7 @@ function simGame() {
   for (let L = 0; L < 16; L++) out.push({ L, ...pickItem(L) });
   SH = null; return out;
 }
-const MOLDNAME = { erro: "Ache o erro", figura: "Figura × enunciado", acopla: "Acoplamento", mij: "Matriz [M] ou [K]", ese: "E se…" };
+const MOLDNAME = { conc: "Conceitos", erro: "Ache o erro", figura: "Figura × enunciado", acopla: "Acoplamento", mij: "Matriz [M] ou [K]", ese: "E se…" };
 // ganchos de cronômetro e som (preenchidos nas etapas 4 e 5)
 const SPK = (on) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/>${on ? '<path d="M16.5 8.5a5 5 0 010 7M19 6a8.5 8.5 0 010 12"/>' : '<path d="M17 9l5 6M22 9l-5 6"/>'}</svg>`;
 const muteBtn = () => `<button class="iconbtn" id="mute" aria-label="${SND.isMuted() ? "Ligar o som" : "Desligar o som"}" aria-pressed="${SND.isMuted()}">${SPK(!SND.isMuted())}</button>`;
@@ -2190,7 +2363,8 @@ function renderShow() {
     fb = `<div class="fb ${right ? "ok" : "bad"}"><b class="t">${right ? (L === 15 ? "Você ganhou R$ 1 milhão!" : `Certo! Você tem ${money(LADDER[L])}`) : c.timeout ? `Tempo esgotado. Você leva ${money(errValue())}` : `Errou. Você leva ${money(errValue())}`}</b>${right ? "" : `<div>Certa: ${ansText(c.mc, c.item, ex)}</div>${diag}`}<div>${c.mc.why}</div></div>`;
     dock = `<button class="btn ${right ? "gold" : "pri"}" id="go">${right && L < 15 ? `Valendo ${money(LADDER[L + 1])} ${ICON.play}` : "Ver resultado"}</button>`;
   }
-  const ref = c.item.noFig ? `<div class="refcard" id="ref"><div class="tabpane"><span class="kicker">Enunciado</span><p>${ex.statement}</p><p class="note">A figura certa está entre as alternativas.</p></div></div>` : refPanel(ex);
+  const plainFig = c.item.plain || c.item.type === "number";
+  const ref = c.item.generic ? `<div class="refcard" id="ref"><div class="tabpane"><span class="kicker">Conceito</span><p class="note">Esta pergunta vale para qualquer mecanismo: não depende da figura.</p></div></div>` : c.item.noFig ? `<div class="refcard" id="ref"><div class="tabpane"><span class="kicker">Enunciado</span><p>${ex.statement}</p><p class="note">A figura certa está entre as alternativas.</p></div></div>` : refPanel(ex, "", plainFig ? { plain: true, noLegend: true } : {});
   app.innerHTML = `
   <header class="top"><button class="iconbtn" id="back" aria-label="Sair do jogo">${ICON.back}</button>
     <div class="ttl"><span class="kicker">Pergunta ${L + 1} de 16 · ${typed ? "Digite a resposta" : MOLDNAME[c.item.mold] || PH[c.mc.ph] || "Desafio final"}</span><b class="money-big">${money(LADDER[L])}</b></div>
@@ -2201,7 +2375,7 @@ function renderShow() {
   <main class="stage"><aside class="ref">${ref}</aside>
     <section class="play">
       <div class="lifelines">${life("pular", "Pular", ICON.skip)}${life("cartas", "Cartas", ICON.cards)}${life("univ", "Universitários", ICON.users)}${life("placas", "Placas", ICON.chart)}</div>
-      <div class="card-q qcard ${c.anim || ""}"><span class="kicker">${esc(ex.title)}${L === 15 ? " · pergunta do milhão" : ""} ${eggHTML(ex)}</span><div class="q">${c.mc.q}</div>${body}${c.extra}${fb}</div>
+      <div class="card-q qcard ${c.anim || ""}"><span class="kicker">${esc(c.item.generic ? "Conceitos gerais" : ex.title)}${L === 15 ? " · pergunta do milhão" : ""} ${c.item.generic ? "" : eggHTML(ex)}</span><div class="q">${c.mc.q}</div>${body}${c.extra}${fb}</div>
       <div class="dock">${dock}</div>
     </section></main>`;
   c.anim = "";
@@ -2589,12 +2763,13 @@ function startDrill(ph) {
 }
 
 /* ---------- tela de jogo ---------- */
-function refPanel(ex, extraBtn = "") {
-  const leg = ex.coords.map((c) => `<span>${nameHTML(c, ex)}</span>`).join("");
-  const fig = ex.figSVG ? `<div class="plate gen">${ex.figSVG}</div>` : `<div class="plate"><img src="${FIGS[ex.fig]}" alt="Figura do exercício ${ex.n}: ${esc(ex.title)}"></div>`;
+function refPanel(ex, extraBtn = "", o = {}) {
+  const leg = o.noLegend ? "" : ex.coords.map((c) => `<span>${nameHTML(c, ex)}</span>`).join("");
+  const svg = ex.figSVG && o.plain ? ex.figSVG.split("var(--accent)").join("var(--ink)").split("var(--bad)").join("var(--ink)") : ex.figSVG;
+  const fig = ex.figSVG ? `<div class="plate gen">${svg}</div>` : `<div class="plate"><img src="${FIGS[ex.fig]}" alt="Figura do exercício ${ex.n}: ${esc(ex.title)}"></div>`;
   return `<div class="refcard" id="ref">
     <div class="tabs"><button class="tab on" data-tab="fig">Figura</button><button class="tab" data-tab="txt">Enunciado</button><button class="tab" data-tab="min" aria-label="Recolher">Recolher</button></div>
-    <div class="tabpane" data-pane="fig">${fig}<div class="legend">coordenadas ${leg}</div>${extraBtn}</div>
+    <div class="tabpane" data-pane="fig">${fig}${leg ? `<div class="legend">coordenadas ${leg}</div>` : ""}${extraBtn}</div>
     <div class="tabpane off" data-pane="txt"><p>${ex.statement}</p><p class="note">${ex.figNote}</p></div></div>`;
 }
 function bindRef() {
