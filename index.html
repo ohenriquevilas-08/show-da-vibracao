@@ -1902,7 +1902,7 @@ const SOM = (() => {
 // Pitágoras, braço trocado, coordenada vizinha) e são conferidas numericamente.
 
 const LADDER = [1e3, 2e3, 3e3, 4e3, 5e3, 1e4, 2e4, 3e4, 4e4, 5e4, 1e5, 2e5, 3e5, 4e5, 5e5, 1e6];
-const money = (v) => (v >= 1e6 ? "R$ 1 milhão" : v >= 1e3 ? `R$ ${v / 1e3} mil` : `R$ ${v}`);
+const money = (v) => (v >= 1e6 ? "R$ 1 milhão" : v >= 1e3 ? `R$ ${String(v / 1e3).replace(".", ",")} mil` : `R$ ${v}`);
 // Cada degrau pede certos tipos de pergunta (fase ou molde) e uma dificuldade-alvo (difficulty em moldes.js).
 const LEVELS = [
   { k: ["trad"], d: 0 }, { k: ["ler", "trad"], d: 1 }, { k: ["mec", "number"], d: 1.5 }, { k: ["number", "match", "mec"], d: 2.5 },
@@ -2070,7 +2070,7 @@ function mcOf(item, ex) {
   if (item.type === "match") {
     const p = R.pick(item.pairs), others = R.shuffle(item.pairs.map((x) => x[1]).concat(item.extra || []).filter((d) => d !== p[1])).slice(0, 3);
     const o = R.shuffle([p[1], ...others]);
-    return { ...base, q: `O que ${nameHTML(p[0], ex)} mede?`, opts: o.map(esc), ans: o.indexOf(p[1]) };
+    return { ...base, q: `O que ${nameHTML(p[0], ex)} mede?`, opts: o, ans: o.indexOf(p[1]) };
   }
   const e = exprOptions(item, ex);
   return { ...base, opts: e.opts, ans: e.ans, expr: true, asts: e.asts };
@@ -2490,6 +2490,9 @@ const exById = Object.fromEntries(EXS.map((e) => [e.id, e]));
 let S = null; // { mode, exId?, queue:[{ex, item}|{sum}], i, pts, max, log:[] }
 const app = document.getElementById("app");
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+// texto puro para <option> (não aceita HTML): índices viram subscritos Unicode
+const SUBS = { 0: "₀", 1: "₁", 2: "₂", 3: "₃", 4: "₄", 5: "₅", 6: "₆", 7: "₇", 8: "₈", 9: "₉", a: "ₐ", e: "ₑ", h: "ₕ", k: "ₖ", l: "ₗ", m: "ₘ", n: "ₙ", o: "ₒ", p: "ₚ", r: "ᵣ", s: "ₛ", t: "ₜ", x: "ₓ" };
+const plainSym = (h) => String(h).replace(/<sub>([^<]*)<\/sub>/g, (_, s) => [...s].map((c) => SUBS[c] || c).join("")).replace(/<[^>]+>/g, "");
 
 function itemKey(ex, item) { return ex.id + ":" + ex.items.indexOf(item); }
 function phaseStats(ex) {
@@ -2647,7 +2650,7 @@ function renderItem(slot, ex, item) {
   else if (item.type === "number") body = `<div class="exprrow num"><input id="inp" type="number" inputmode="numeric" min="0" step="1" aria-label="Resposta"></div>`;
   else if (item.type === "match") {
     const descs = item.pairs.map((p) => p[1]).concat(item.extra || []).sort(() => Math.random() - 0.5);
-    body = `<div class="match">${item.pairs.map((p, i) => `<label><span class="lhs">${nameHTML(p[0], ex)}</span><select data-i="${i}" aria-label="O que ${p[0]} mede"><option value="">escolha…</option>${descs.map((d) => `<option>${esc(d)}</option>`).join("")}</select></label>`).join("")}</div>`;
+    body = `<div class="match">${item.pairs.map((p, i) => `<label><span class="lhs">${nameHTML(p[0], ex)}</span><select data-i="${i}" aria-label="O que ${p[0]} mede"><option value="">escolha…</option>${descs.map((d) => `<option value="${esc(d).replace(/"/g, "&quot;")}">${plainSym(d)}</option>`).join("")}</select></label>`).join("")}</div>`;
   } else body = exprPad(ex, item);
   slot.innerHTML = `<div class="card-q" id="card">${head}${body}<div id="fb"></div></div>
     <div class="dock"><button class="btn ghost" id="hint">${ICON.bulb}Dica</button><button class="btn" id="show" hidden>Ver resposta</button><button class="btn pri" id="go">Conferir</button><button class="btn pri" id="nx" hidden>Próximo ${ICON.play}</button></div>`;
@@ -2672,7 +2675,7 @@ function renderItem(slot, ex, item) {
   function answerHTML() {
     if (item.type === "choice") return item.opts[item.ans];
     if (item.type === "number") return String(item.ans);
-    if (item.type === "match") return item.pairs.map((p) => `${nameHTML(p[0], ex)}: ${esc(p[1])}`).join("<br>");
+    if (item.type === "match") return item.pairs.map((p) => `${nameHTML(p[0], ex)}: ${p[1]}`).join("<br>");
     return `<span class="ans">${item.lhs} ${P(item.ans, ex)}</span>`;
   }
   function finishItem(pts, title) {
