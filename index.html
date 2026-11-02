@@ -1774,12 +1774,13 @@ function moldEse(ex) {
   return null;
 }
 function addMolds(ex, kinds = MOLDS) {
-  const add = (it) => { if (!it) return; if (!it.generic) it.tpl = ex.fam + ":" + it.tpl; ex.items.push(it); };
+  const add = (it) => { if (!it) return; if (!it.generic && !it.noFam) it.tpl = ex.fam + ":" + it.tpl; ex.items.push(it); };
   const want = (k) => kinds.includes(k);
   if (want("erro")) try { add(moldErro(ex)); } catch (e) {}
   if (want("figura")) try { add(moldFigura(ex)); } catch (e) {}
   if (want("acopla") || want("mij")) try { moldAcopla(ex).forEach(add); } catch (e) {}
   if (want("ese")) try { add(moldEse(ex)); } catch (e) {}
+  if (want("intu") || want("vf")) try { addIntu(ex, kinds).forEach(add); } catch (e) {}
   if (want("conc")) try { addConc(ex).forEach(add); } catch (e) {}
   return ex;
 }
@@ -1948,6 +1949,228 @@ function addConc(ex) {
   return out;
 }
 
+// Perguntas de intuição (v7): o Show da Vibração é um "Show do Milhão": pergunta curta, resposta no olho,
+// sem fazer conta. Aqui ficam as perguntas que desafiam a intuição (sentido do movimento, sinal dos termos,
+// unidades, escala, o que muda quando o modelo muda, verdadeiro ou falso). Só o Show usa (addIntu, em moldes.js).
+// As ligadas ao mecanismo são calculadas com o próprio gabarito (derivadas e sinais conferidos por amostras).
+
+const NMS = (id, ex) => nameHTML(id, ex);
+const isAng = (c) => /^(th|ph)/.test(c);
+function signOver(ast, ex, v) {
+  const d = dif(ast, v); let p = 0, n = 0, z = 0;
+  for (let i = 0; i < 8; i++) { const x = ev(d, envOf(ex, rawSample(ex))); if (Math.abs(x) < 1e-9) z++; else if (x > 0) p++; else n++; }
+  return z === 8 ? "0" : p === 8 ? "+" : n === 8 ? "-" : "mix";
+}
+function iQ(id, diff, q, right, wrongs, why, hint, extra = {}) {
+  const opts = R.shuffle([right, ...wrongs]);
+  return { ph: extra.ph || "mec", mold: extra.mold || "intu", tpl: "intu:" + id, diff, type: "choice", q, opts, ans: opts.indexOf(right), why, hint, noFam: true, ...extra };
+}
+
+/* ---------- sentido do movimento ---------- */
+function intuMove(ex) {
+  const its = R.shuffle(ex.items.filter((it) => it.type === "expr" && it.ph === "pos" && /^Deslocamento/.test(it.q) && !/\(para/.test(it.q)));
+  const out = [];
+  for (const it of its) {
+    let ast; try { ast = expandDerived(parse(it.ans), ex); } catch (e) { continue; }
+    const vs = R.shuffle(ex.coords.filter((c) => varsOf(expandDerived(parse(it.ans), ex)).has(c)));
+    if (!vs.length) continue;
+    const c = vs[0], s = signOver(ast, ex, c);
+    const O = ["Aumenta (vai no mesmo sentido)", "Diminui (vai no sentido oposto)", "Não muda", "Depende dos valores numéricos"];
+    const right = s === "+" ? O[0] : s === "-" ? O[1] : s === "0" ? O[2] : O[3];
+    const other = ex.coords.filter((x) => x !== c).map((x) => nameHTML(x, ex));
+    out.push(iQ("move", s === "-" ? 7.2 : s === "+" ? 5.6 : 6.5,
+      `${it.q} Se <b>${NMS(c, ex)}</b> aumenta (sentido positivo da figura)${other.length ? ` e ${other.length > 1 ? "as demais coordenadas ficam" : `${other[0]} fica`} parad${other.length > 1 ? "as" : "a"}` : ""}, essa grandeza:`,
+      right, O.filter((o) => o !== right),
+      s === "-" ? "Gangorra: quando só uma coordenada se move, o resto da peça gira em torno do que está parado, e os pontos do outro lado vão ao contrário." : s === "+" ? "O ponto acompanha a coordenada: sem nada mais se mexendo, ele é arrastado para o mesmo lado." : s === "0" ? "Esse ponto não depende dessa coordenada." : "O sinal depende das distâncias envolvidas.",
+      "Imagine só essa coordenada mudando e o resto da figura preso: o que a peça faz em volta do que está parado?", { ph: "pos" }));
+    if (out.length >= 2) break;
+  }
+  return out;
+}
+
+/* ---------- sinal dos termos cruzados ---------- */
+function intuSinal(ex) {
+  const n = ex.coords.length, out = [];
+  if (n < 2) return out;
+  for (const w of R.shuffle(["K", "M"])) {
+    const pairs = []; for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) pairs.push([i, j]);
+    for (const [i, j] of R.shuffle(pairs)) {
+      let a; try { a = matEntry(ex, w, i, j); } catch (e) { continue; }
+      if (!a) continue;
+      const vals = Array.from({ length: 8 }, () => ev(a, envOf(ex, rawSample(ex))));
+      const sg = vals.every((v) => Math.abs(v) < 1e-9) ? "0" : vals.every((v) => v > 1e-9) ? "+" : vals.every((v) => v < -1e-9) ? "-" : "mix";
+      const O = ["Positivo", "Negativo", "Zero (não acoplam)", "Pode ter qualquer sinal, depende dos valores"];
+      const right = sg === "+" ? O[0] : sg === "-" ? O[1] : sg === "0" ? O[2] : O[3];
+      const lab = `${w}<sub>${i + 1}${j + 1}</sub>`;
+      out.push(iQ("sinal-" + w, sg === "-" ? 5 : sg === "+" ? 6 : sg === "0" ? 5.5 : 8,
+        `Na matriz ${w === "K" ? "de rigidez" : "de massa"}, o termo <b>${lab}</b> (entre ${NMS(ex.coords[i], ex)} e ${NMS(ex.coords[j], ex)}) é:`, right, O.filter((o) => o !== right),
+        w === "K" ? "K₁₂ mede a força que surge na coordenada 1 quando a 2 se desloca. Mola esticada puxa para um lado e reage no outro: o termo cruzado de uma mola entre duas coordenadas medidas no mesmo sentido é negativo." : "M₁₂ mede quanto a velocidade de uma coordenada arrasta a energia cinética da outra: positivo se o movimento das duas coordenadas leva a massa para o mesmo lado, negativo se leva para lados opostos.",
+        w === "K" ? "Pense numa mola entre duas massas: se só a primeira anda para a direita, para que lado a mola puxa a segunda?" : "Se as duas coordenadas crescem, a massa vai para o mesmo lado ou para lados opostos?", { ph: w === "K" ? "V" : "T" }));
+      break;
+    }
+  }
+  return out;
+}
+
+/* ---------- unidades (análise dimensional) ---------- */
+function intuUnid(ex) {
+  const n = ex.coords.length, out = [], c = ex.coords, nm = (k) => NMS(c[k], ex);
+  const pair = (i, j) => (i === j ? `da coordenada ${nm(i)}` : `entre ${nm(i)} e ${nm(j)}`);
+  const i = R.int(0, n - 1), j = R.int(i, n - 1), A = isAng(c[i]), B = isAng(c[j]), ang = (A ? 1 : 0) + (B ? 1 : 0);
+  const mix = ang === 1;
+  const Mu = ["kg", "kg·m", "kg·m²", "kg/m"], Ku = ["N/m", "N/rad", "N·m/rad", "N·s/m"];
+  out.push(iQ("unid-M", ang === 1 ? 6.2 : ang === 2 ? 5.6 : 4.6, `Qual a unidade do termo <b>M<sub>${i + 1}${j + 1}</sub></b> da matriz de massa (${pair(i, j)})?`,
+    ang === 0 ? "kg" : ang === 2 ? "kg·m²" : "kg·m", Mu.filter((u) => u !== (ang === 0 ? "kg" : ang === 2 ? "kg·m²" : "kg·m")),
+    "M_ij = ∂²T/∂q̇ᵢ∂q̇ⱼ: energia dividida por velocidade·velocidade. Translação com translação dá kg; rotação com rotação dá kg·m²; misturar rotação e translação dá kg·m.", "T tem unidade de energia (kg·m²/s²). Divida pelas unidades das duas velocidades.", { ph: "T" }));
+  const ku = ang === 0 ? "N/m" : ang === 2 ? "N·m/rad" : "N/rad";
+  out.push(iQ("unid-K", mix ? 6.4 : ang === 2 ? 5.8 : 4.8, `Qual a unidade do termo <b>K<sub>${i + 1}${j + 1}</sub></b> da matriz de rigidez (${pair(i, j)})?`,
+    ku, Ku.filter((u) => u !== ku), "K_ij = ∂²V/∂qᵢ∂qⱼ: energia dividida por (coordenada × coordenada). Dois deslocamentos: N/m; duas rotações: N·m/rad; um de cada: N/rad.", "V tem unidade de energia (N·m). Divida pelas unidades das duas coordenadas.", { ph: "V" }));
+  const k = R.int(0, n - 1), isA = isAng(c[k]);
+  out.push(iQ("unid-Q", isA ? 4.6 : 3.4, `A força generalizada <b>Q<sub>${k + 1}</sub></b>, associada à coordenada ${nm(k)}, tem unidade de:`, isA ? "N·m (momento)" : "N (força)",
+    ["N (força)", "N·m (momento)", "N/m (rigidez)", "N·s (impulso)"].filter((u) => u !== (isA ? "N·m (momento)" : "N (força)")),
+    "Q·δq é trabalho (energia). Se a coordenada é um deslocamento, Q é força; se é uma rotação, Q é momento.", "δW = Q δq. O trabalho é N·m.", { ph: "Q" }));
+  return out;
+}
+
+/* ---------- escala: o que acontece com T, V ou D ---------- */
+function intuEscala() {
+  const kind = R.pick(["T", "V", "D"]);
+  const a = R.pick([2, 3, 4]), b = R.pick([2, 3, 1 / 2]), right = a * b * b;
+  const fmt = (x) => `× ${x === 0.5 ? "½" : x === 0.25 ? "¼" : x === 0.125 ? "⅛" : Number.isInteger(x) ? x : String(+x.toFixed(2)).replace(".", ",")}`;
+  const bTxt = b === 0.5 ? "cai à metade" : `${b === 2 ? "dobra" : "triplica"}`;
+  const P = { T: ["massa", "velocidade", "T"], V: ["rigidez da mola", "deformação", "V"], D: ["coeficiente do amortecedor", "velocidade da deformação", "D"] }[kind];
+  const aTxt = a === 2 ? "dobra" : a === 3 ? "triplica" : "quadruplica";
+  const cand = [a * b, b * b, a + b, a * b * b * b, a * a * b, 2 * a * b * b].filter((x) => x !== right && x > 0);
+  const wrongs = [...new Set(cand)].slice(0, 3);
+  while (wrongs.length < 3) wrongs.push(right * (wrongs.length + 2));
+  const opts = R.shuffle([right, ...wrongs]);
+  return { ph: kind, mold: "intu", generic: true, tpl: "intu:escala", diff: 3 + (b === 0.5 ? 1 : 0) + (a === 4 ? 0.6 : 0), type: "choice",
+    q: `Num mecanismo, a ${P[0]} ${aTxt} e a ${P[1]} ${bTxt}. A energia ${P[2] === "D" ? "dissipada (D)" : P[2]} fica:`, opts: opts.map(fmt), ans: opts.indexOf(right),
+    why: `${P[2]} é proporcional à ${P[0]} e ao QUADRADO da ${P[1]}: × ${a} × ${b === 0.5 ? "¼" : b * b} = ${fmt(right).slice(2)}.`, hint: "A energia cresce com o quadrado da velocidade (ou da deformação), mas só linearmente com a massa (ou rigidez)." };
+}
+
+/* ---------- o que muda no número de GDL ---------- */
+const GLS = [
+  ["Acrescentamos uma mola entre duas massas que já se moviam livremente.", 0, 3],
+  ["Acrescentamos um amortecedor em paralelo com uma mola que já existia.", 0, 3],
+  ["A base do sistema, antes parada, passa a ter movimento imposto z(t), conhecido.", 0, 4.5],
+  ["Uma massa que só andava em x agora também pode andar em y, no plano.", 1, 3.5],
+  ["Soltamos o pino fixo de uma barra que só girava: agora ela também translada no plano.", 2, 5],
+  ["Ligamos duas massas livres, que andavam na mesma reta, por uma haste rígida e leve.", -1, 5],
+  ["Uma massa que se movia livre no plano passa a ser guiada por um trilho reto.", -1, 4.5],
+  ["Acrescentamos mais uma massa, livre, na mesma reta de uma fileira de carrinhos.", 1, 3],
+  ["Trocamos um carrinho por outro com o dobro da massa.", 0, 3],
+  ["A haste rígida de um pêndulo é trocada por uma mola: a massa pode também esticar a mola.", 1, 6],
+  ["Uma barra rígida, apoiada em duas molas verticais, ganha uma terceira mola vertical.", 0, 4],
+  ["Duas massas livres no plano são unidas por uma barra rígida e leve (a distância entre elas fica fixa).", -1, 6.5],
+];
+function intuMuda() {
+  const [q, d, df] = R.pick(GLS), O = { "-2": "Diminui em 2", "-1": "Diminui em 1", 0: "Fica igual", 1: "Aumenta em 1", 2: "Aumenta em 2" };
+  const keys = [-1, 0, 1, 2].filter((k) => k !== d); const right = O[d];
+  const wr = R.shuffle(keys).slice(0, 3).map((k) => O[k]);
+  const opts = R.shuffle([right, ...wr]);
+  return { ph: "mec", mold: "intu", generic: true, tpl: "intu:muda", diff: df, type: "choice", q: `${q} O número de graus de liberdade:`, opts, ans: opts.indexOf(right),
+    why: "Conte o que a pessoa que montou o modelo precisa dizer para localizar tudo: molas e amortecedores só ligam coisas; massas livres, guias e ligações rígidas é que mudam a contagem.", hint: "Mola e amortecedor não são graus de liberdade. O que muda é quantos movimentos independentes sobram." };
+}
+
+/* ---------- casos limite (intuição física) ---------- */
+const LIMITES = [
+  ["Se a mola que liga duas massas ficar infinitamente rígida, as duas massas:", "passam a se mover como uma só (perde-se 1 GDL)", ["continuam independentes, nada muda", "ganham 1 GDL a mais", "ficam paradas"], "Mola infinitamente rígida vira haste rígida: a distância entre as massas deixa de variar.", 6],
+  ["Se a rigidez de uma mola que prende uma ponta da barra ao chão tender a infinito, aquele ponto se comporta como:", "um apoio fixo (não se desloca)", ["uma massa livre", "um amortecedor", "uma força externa"], "Mola infinitamente rígida não deixa o ponto se deslocar: vira apoio.", 5.5],
+  ["Se a mola de acoplamento entre dois pêndulos iguais tender a zero (k → 0), os pêndulos:", "oscilam independentes, cada um com sua frequência", ["oscilam sempre em fase", "param de oscilar", "oscilam sempre em oposição"], "Sem mola entre eles não há acoplamento: o [K] fica diagonal e cada um oscila sozinho.", 5],
+  ["Num sistema sem amortecedor e sem força externa, a soma T + V ao longo do tempo:", "permanece constante", ["cresce lentamente", "diminui lentamente", "oscila entre zero e o dobro"], "Sem dissipação nem entrada de energia, T e V trocam energia, mas a soma não muda.", 4],
+  ["Quando uma massa presa a uma mola passa pela posição de equilíbrio com velocidade máxima:", "T é máxima e V é mínima (zero)", ["T é zero e V é máxima", "T e V são máximas ao mesmo tempo", "T e V são zero"], "No equilíbrio a mola não está deformada (V = 0), e toda a energia está na forma cinética.", 3.5],
+  ["Quando uma massa presa a uma mola está no extremo do movimento (para por um instante):", "V é máxima e T é zero", ["T é máxima e V é zero", "T e V são zero", "T e V são iguais"], "No extremo a velocidade é zero (T = 0) e a mola está o mais deformada possível.", 3.5],
+  ["Se uma das massas de um sistema fica enorme (m → ∞) em relação às outras, ela tende a:", "ficar praticamente parada, como uma parede", ["oscilar mais rápido que as outras", "oscilar em fase com todas", "desaparecer do modelo"], "Uma massa muito grande reage pouco: quase não acelera.", 6],
+  ["Se o amortecimento de um sistema que oscila livremente aumenta (sem chegar ao crítico), a amplitude das oscilações:", "decai mais rápido", ["decai mais devagar", "cresce", "fica constante"], "Mais dissipação por ciclo: a energia acaba mais depressa.", 4.5],
+  ["Se a gravidade fosse zero, um pêndulo simples (sem mola):", "não teria força restauradora, e não oscilaria", ["oscilaria mais devagar", "oscilaria mais rápido", "oscilaria igual"], "No pêndulo a força restauradora é o peso: sem g, nada puxa de volta.", 7],
+  ["Se a massa de um pêndulo simples dobra (mesmo comprimento), o período das pequenas oscilações:", "não muda", ["dobra", "cai à metade", "cresce √2 vezes"], "A massa aparece na inércia e no peso: os dois dobram e se cancelam.", 7.5],
+];
+function intuLimite() {
+  const [q, r, w, why, d] = R.pick(LIMITES);
+  return iQ("limite", d, q, r, w, why, "Leve o parâmetro ao extremo e pergunte o que a física faz.", { generic: true });
+}
+
+/* ---------- verdadeiro ou falso ---------- */
+// [texto, dificuldade, grupo, explicação]: dois enunciados do mesmo grupo nunca aparecem juntos
+const VERD = [
+  ["[M] e [K] são simétricas: M₁₂ = M₂₁ e K₁₂ = K₂₁.", 3, "sim", "São derivadas segundas cruzadas (∂²T/∂q̇₁∂q̇₂ = ∂²T/∂q̇₂∂q̇₁), então a ordem não importa."],
+  ["Trocar as coordenadas do modelo muda [M] e [K], mas não muda as frequências naturais.", 6.5, "freq", "A física é a mesma; só a descrição muda. As frequências naturais são do sistema, não das coordenadas."],
+  ["Um movimento imposto, como o z(t) da pista, entra nas equações como excitação e não como coordenada.", 4, "imp", "Quem não tem liberdade própria não ganha equação de movimento."],
+  ["Medindo os deslocamentos a partir do equilíbrio estático, o peso é cancelado pela pré-carga das molas.", 5, "peso", "Na posição de equilíbrio as molas já seguram o peso: só a variação conta."],
+  ["Um corpo rígido que se move livremente no plano precisa de 3 coordenadas.", 2.5, "gl3", "Dois deslocamentos e uma rotação."],
+  ["A energia cinética nunca é negativa.", 2, "tpos", "É ½ m v² (ou ½ J ω²): quadrado vezes constante positiva."],
+  ["Para pequenas rotações, sen θ ≈ θ e cos θ ≈ 1.", 3, "peq", "É a linearização usada em quase todo o curso."],
+  ["Um amortecedor entre duas massas dissipa energia pela velocidade RELATIVA entre as pontas.", 5.5, "relv", "D usa a taxa de deformação do amortecedor, que é a diferença de velocidades entre as pontas."],
+  ["No pêndulo simples a própria gravidade faz o papel da mola: gera a força restauradora.", 6, "pend", "Não há mola; a componente do peso puxa de volta. Por isso o peso NÃO se cancela aí."],
+  ["Duas coordenadas são independentes quando nenhuma delas pode ser escrita em função da outra.", 3.5, "indep", "É a definição de coordenadas independentes."],
+  ["Uma mola entre duas massas é deformada pelo deslocamento RELATIVO entre elas.", 3, "relk", "Se as duas se movem juntas, a mola nem muda de comprimento."],
+  ["A força generalizada associada a um ângulo tem unidade de momento (N·m).", 5.5, "uq", "Q·δq é trabalho; δθ é adimensional, então Q é N·m."],
+  ["Numa barra que gira em torno de um pino, os pontos dos dois lados do pino se movem em sentidos opostos.", 4.5, "gang", "Como uma gangorra: um lado sobe, o outro desce."],
+  ["O número de equações de movimento é igual ao número de graus de liberdade.", 2, "neq", "Uma equação para cada coordenada independente."],
+  ["Uma mola presa a um ponto a uma distância a do pino contribui para a rigidez em θ proporcional a a².", 6.5, "a2", "Deformação = aθ, então V = ½ k (aθ)² = ½ (k a²) θ²."],
+  ["Uma força F perpendicular à haste, aplicada a uma distância L do pino, gera Q = F·L na coordenada θ.", 6, "braco", "Q multiplica δθ em δW: o deslocamento do ponto é L δθ, então Q = F L."],
+  ["Hastes e molas sem massa não entram na energia cinética.", 2.5, "semmassa", "T só tem o que tem massa ou inércia."],
+  ["Se há um amortecedor em paralelo com uma mola, os dois se deformam da mesma quantidade.", 4, "paral", "Estão ligados nos mesmos pontos."],
+  ["Num sistema sem amortecedor e sem força externa, T + V é constante.", 3.5, "cons", "Não há perda nem entrada de energia."],
+  ["Um sistema com 2 graus de liberdade tem 2 frequências naturais.", 3.5, "nfreq", "Uma por modo de vibração, e há tantos modos quanto GDL."],
+  ["Uma massa que só se move na horizontal não varia sua energia potencial gravitacional.", 3, "hor", "A altura não muda."],
+  ["Se as coordenadas são relativas (cada uma medida a partir da anterior), costuma aparecer termo cruzado em [M].", 7, "rel", "A velocidade absoluta de cada massa soma as velocidades relativas, e o quadrado gera produtos cruzados."],
+  ["Uma massa na ponta de uma haste sem massa entra em T só pela massa: a haste não entra.", 3, "ponta", "A haste leve não tem energia cinética própria."],
+  ["Num sistema de 3 GDL, as matrizes [M], [C] e [K] são 3 × 3.", 2.5, "tam", "Uma linha e uma coluna por coordenada."],
+  ["A energia potencial elástica nunca é negativa.", 2.5, "vpos", "É ½ k Δ²: quadrado vezes constante positiva."],
+];
+const FALSO = [
+  ["Um movimento imposto, como z(t), conta como grau de liberdade.", 4, "imp", "Ele é dado do problema: não ganha equação."],
+  ["Mudar as coordenadas do modelo muda as frequências naturais do sistema.", 6.5, "freq", "As frequências são do sistema físico: não dependem de como o descrevemos."],
+  ["A energia potencial de uma mola é ½ k Δ, sem o quadrado.", 2.5, "vq", "É ½ k Δ²: a força cresce com Δ e a energia é a área."],
+  ["Molas e hastes sem massa entram em T com ½ m v².", 3, "semmassa", "Sem massa, sem energia cinética."],
+  ["[K] pode ser não simétrica se escolhermos coordenadas diferentes.", 5.5, "sim", "É sempre simétrica: vem de uma derivada segunda cruzada."],
+  ["Um corpo rígido livre no plano tem 2 graus de liberdade.", 2.5, "gl3", "São 3: dois deslocamentos e uma rotação."],
+  ["Acrescentar uma mola entre duas massas aumenta em 1 o número de graus de liberdade.", 3.5, "molagl", "Mola só liga: a contagem de GDL não muda."],
+  ["A força generalizada tem sempre unidade de força (N).", 5.5, "uq", "Se a coordenada é um ângulo, Q é momento (N·m)."],
+  ["D depende da deformação do amortecedor, e não da velocidade dela.", 4, "dv", "D = ½ c Δ̇²: depende da taxa de deformação."],
+  ["Todo sistema com duas coordenadas tem [M] e [K] acopladas.", 5, "acop", "Depende das coordenadas: podem ser diagonais."],
+  ["No pêndulo simples, o peso sempre se cancela com a pré-carga de alguma mola.", 6, "pend", "Não há mola: o peso é a força restauradora, e entra em V."],
+  ["Para pequenas rotações, cos θ ≈ θ.", 3, "peq", "cos θ ≈ 1; é sen θ que vale ≈ θ."],
+  ["Num sistema massa-mola, aumentar a massa aumenta a frequência natural.", 4.5, "mfreq", "ω = √(k/m): mais massa, menos frequência."],
+  ["O número de graus de liberdade é igual ao número de molas.", 2.5, "mol", "Molas ligam coisas: não são graus de liberdade."],
+  ["Q = F para qualquer coordenada, sempre.", 5.5, "q", "Q depende de como o ponto da força se move com a coordenada: pode ter braço (F·L) ou fator geométrico."],
+  ["Numa barra que gira em torno de um pino, os pontos dos dois lados do pino se movem no mesmo sentido.", 4.5, "gang", "Lados opostos do pino movem-se em sentidos opostos (gangorra)."],
+  ["Um amortecedor armazena energia e depois a devolve ao sistema.", 3, "armaz", "Ele dissipa; quem armazena e devolve é a mola."],
+  ["Em coordenadas absolutas, uma mola entre dois carrinhos produz K₁₂ positivo.", 6.5, "kneg", "K₁₂ = −k: a mola puxa o segundo carrinho para o lado oposto ao do primeiro."],
+  ["A velocidade que entra em D é sempre a velocidade absoluta da massa.", 5.5, "relv", "É a velocidade relativa entre as pontas do amortecedor."],
+  ["A energia cinética de um corpo rígido que gira é sempre ½ m v², sem mais nada.", 3.5, "tgira", "Tem também ½ J ω² (e ½ m v² do centro de massa)."],
+  ["A distância do ponto de aplicação da força ao pino não influencia a força generalizada.", 6, "braco", "Q = F·L: o braço multiplica."],
+  ["Uma barra rígida só apoiada em duas molas verticais, que apenas sobe e gira, tem 3 GDL.", 4.5, "barra2", "Só sobe e gira: 2 GDL."],
+  ["A energia potencial elástica pode ser negativa.", 2.5, "vpos", "É ½ k Δ²: nunca negativa."],
+  ["Num sistema de 3 GDL, [M] é uma matriz 2 × 2.", 2, "tam", "É 3 × 3."],
+  ["Se a gravidade fosse zero, o pêndulo simples oscilaria mais devagar, mas ainda oscilaria.", 7, "g0", "Sem gravidade não há força restauradora: não oscila."],
+  ["M₁₂ = M₂₁ só quando as massas são iguais.", 5.5, "sim", "É sempre: a matriz é simétrica."],
+];
+function intuVF(tier) {
+  const [lo, hi] = tier === "f" ? [0, 4] : tier === "m" ? [3.5, 6.2] : [5.8, 10];
+  const mode = R.pick(["falsa", "verdadeira"]);
+  const T = R.shuffle(VERD.filter((s) => s[1] >= lo && s[1] <= hi)), F = R.shuffle(FALSO.filter((s) => s[1] >= lo && s[1] <= hi));
+  const need = mode === "falsa" ? [F, T, 1, 3] : [T, F, 1, 3];
+  const [singleP, multiP] = need;
+  const single = singleP[0]; if (!single) return null;
+  const used = new Set([single[2]]), many = [];
+  for (const s of multiP) { if (used.has(s[2])) continue; used.add(s[2]); many.push(s); if (many.length === 3) break; }
+  if (many.length < 3) return null;
+  const all = [single, ...many], opts = R.shuffle(all.map((s) => s[0])), d = all.reduce((a, s) => a + s[1], 0) / 4;
+  return { ph: "mec", mold: "vf", generic: true, tpl: `vf:${tier}:${mode}`, diff: Math.min(9, d + 0.5), type: "choice", q: `Qual destas afirmações é <b>${mode.toUpperCase()}</b>?`, opts, ans: opts.indexOf(single[0]),
+    why: single[3], hint: mode === "falsa" ? "Três delas são resultados que você já viu em aula. Procure a que parece boa demais ou que contradiz a física." : "Procure a que você consegue justificar em uma frase." };
+}
+
+function addIntu(ex, kinds) {
+  const out = [];
+  const w = (k) => kinds.includes(k);
+  if (w("intu")) { out.push(...intuMove(ex), ...intuSinal(ex), ...intuUnid(ex), intuEscala(), intuMuda(), intuLimite()); }
+  if (w("vf")) ["f", "m", "d"].forEach((t) => out.push(intuVF(t)));
+  return out.filter(Boolean);
+}
+
 // Som do Show da Vibração: tudo sintetizado com Web Audio (nenhum arquivo). O AudioContext nasce no
 // primeiro toque do jogador; sem áudio (ou com erro) o jogo segue mudo. store.mute guarda o mudo.
 const SOM = (() => {
@@ -2037,12 +2260,12 @@ const money = (v) => (v >= 1e6 ? "R$ 1 milhão" : v >= 1e3 ? `R$ ${String(v / 1e
 // Cada degrau pede certos tipos de pergunta (fase ou molde) e uma dificuldade-alvo (difficulty em moldes.js).
 const LEVELS = [
   { k: ["trad", "conc"], d: 0.2 }, { k: ["ler", "trad", "conc"], d: 1 }, { k: ["mec", "number", "conc"], d: 1.8 }, { k: ["number", "match", "mec", "conc"], d: 2.6 },
-  { k: ["acopla", "figura", "conc"], d: 3.8 }, { k: ["pos", "V"], d: 3.5 }, { k: ["figura", "acopla", "pos"], d: 4.5 }, { k: ["T", "V", "D", "pos"], d: 5 },
-  { k: ["erro", "ese"], d: 6 }, { k: ["T", "Q", "pos"], d: 6 }, { k: ["ese", "erro", "mij"], d: 6.5 }, { k: ["Q", "T", "mij"], d: 7 },
-  { k: ["pos", "T", "V", "Q"], d: 6 }, { k: ["T", "Q", "pos", "V"], d: 6.8 }, { k: ["T", "Q", "mij"], d: 7.5 }, { k: ["T", "Q", "mij"], d: 9 },
+  { k: ["vf", "conc", "figura"], d: 3.2 }, { k: ["vf", "intu", "conc", "acopla"], d: 4 }, { k: ["intu", "vf", "acopla", "figura"], d: 4.8 }, { k: ["intu", "vf"], d: 5.4 },
+  { k: ["intu", "vf"], d: 6 }, { k: ["intu", "vf"], d: 6.4 }, { k: ["intu", "vf"], d: 6.8 }, { k: ["intu", "vf"], d: 7.2 },
+  { k: ["intu", "vf"], d: 7.6 }, { k: ["intu", "vf"], d: 8 }, { k: ["intu", "vf"], d: 8.4 }, { k: ["intu", "vf"], d: 9 },
 ];
 const TYPED_FROM = 99; // v6: o Show é só múltipla escolha (a resposta digitada ficou no Treino por fase)
-const MOLDS = ["erro", "figura", "acopla", "mij", "ese", "conc"];
+const MOLDS = ["erro", "figura", "acopla", "mij", "ese", "conc", "vf", "intu"];
 
 /* ---------- alternativas erradas ---------- */
 const clone = (a) => JSON.parse(JSON.stringify(a));
@@ -2305,13 +2528,13 @@ function simGame() {
   for (let L = 0; L < 16; L++) out.push({ L, ...pickItem(L) });
   SH = null; return out;
 }
-const MOLDNAME = { conc: "Conceitos", erro: "Ache o erro", figura: "Figura × enunciado", acopla: "Acoplamento", mij: "Matriz [M] ou [K]", ese: "E se…" };
+const MOLDNAME = { conc: "Conceitos", vf: "Verdadeiro ou falso", intu: "Intuição", erro: "Ache o erro", figura: "Figura × enunciado", acopla: "Acoplamento", mij: "Matriz [M] ou [K]", ese: "E se…" };
 // ganchos de cronômetro e som (preenchidos nas etapas 4 e 5)
 const SPK = (on) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/>${on ? '<path d="M16.5 8.5a5 5 0 010 7M19 6a8.5 8.5 0 010 12"/>' : '<path d="M17 9l5 6M22 9l-5 6"/>'}</svg>`;
 const muteBtn = () => `<button class="iconbtn" id="mute" aria-label="${SND.isMuted() ? "Ligar o som" : "Desligar o som"}" aria-pressed="${SND.isMuted()}">${SPK(!SND.isMuted())}</button>`;
 function SHOWTOP() { return `${muteBtn()}<span class="pill gold wide-only">${ICON.trophy}${money(stopValue())}</span>`; }
 // cronômetro: opcional (store.timer, desligado por padrão); estourou = erro
-const timeLimit = (L, typed) => (L <= 4 ? 60 : L <= 9 ? 150 : 300);
+const timeLimit = (L, typed) => (L <= 4 ? 30 : L <= 9 ? 45 : 60);
 let TMR = null;
 function TIMERBAR() {
   const c = SH.cur; if (store.timer !== true || c.state === "done") return "";
@@ -2711,7 +2934,7 @@ function home() {
     <button class="tile feature" id="show"><span class="coins">R$ 1 mil → R$ 1 milhão</span><h2>Show da Vibração</h2>
       <p>16 perguntas, cada uma num mecanismo novo: carro, avião, drone, turbina, ponte, torre. Ache o erro, case figura e enunciado, acoplamentos e, a partir de R$ 300 mil, resposta digitada. Errou, leva a metade.</p>
       <span class="go">${ICON.play}Jogar</span></button>
-    <label class="tswitch" for="tmr" style="grid-column:1/-1"><span>Cronômetro<small>Desligado por padrão. Ligado: 1 min até R$ 5 mil, 2,5 min até R$ 50 mil, 5 min depois (dá para usar papel)</small></span><input type="checkbox" id="tmr" ${store.timer === true ? "checked" : ""}></label>
+    <label class="tswitch" for="tmr" style="grid-column:1/-1"><span>Cronômetro<small>Desligado por padrão. Ligado: 30 s até R$ 5 mil, 45 s até R$ 50 mil, 60 s depois</small></span><input type="checkbox" id="tmr" ${store.timer === true ? "checked" : ""}></label>
     <section class="tile"><h2>Mecanismo novo</h2><p>Um sistema que você nunca viu, com as 8 fases e respostas digitadas.</p>
       <div class="chiprow"><button class="chipbtn pri" data-gen="any">${ICON.dice} Sortear</button>${Object.keys(GEN).map((k) => `<button class="chipbtn" data-gen="${k}">${GEN_NAMES[k]}</button>`).join("")}</div></section>
     <section class="tile"><h2>Treino por fase</h2><p>12 itens seguidos da mesma fase, cada um de um mecanismo novo.</p><div class="chiprow">${drills}</div></section>
