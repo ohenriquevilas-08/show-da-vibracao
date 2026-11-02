@@ -2310,18 +2310,18 @@ const MOLDNAME = { conc: "Conceitos", erro: "Ache o erro", figura: "Figura × en
 const SPK = (on) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/>${on ? '<path d="M16.5 8.5a5 5 0 010 7M19 6a8.5 8.5 0 010 12"/>' : '<path d="M17 9l5 6M22 9l-5 6"/>'}</svg>`;
 const muteBtn = () => `<button class="iconbtn" id="mute" aria-label="${SND.isMuted() ? "Ligar o som" : "Desligar o som"}" aria-pressed="${SND.isMuted()}">${SPK(!SND.isMuted())}</button>`;
 function SHOWTOP() { return `${muteBtn()}<span class="pill gold wide-only">${ICON.trophy}${money(stopValue())}</span>`; }
-// cronômetro: opcional (store.timer, ligado por padrão); estourou = erro
-const timeLimit = (L, typed) => (typed || L === 15 ? 90 : L <= 9 ? 45 : 60);
+// cronômetro: opcional (store.timer, desligado por padrão); estourou = erro
+const timeLimit = (L, typed) => (L <= 4 ? 60 : L <= 9 ? 150 : 300);
 let TMR = null;
 function TIMERBAR() {
-  const c = SH.cur; if (store.timer === false || c.state === "done") return "";
+  const c = SH.cur; if (store.timer !== true || c.state === "done") return "";
   const left = Math.max(0, c.limit - (Date.now() - c.t0) / 1000);
   return `<div class="timer ${left <= 10 ? "low" : ""}" id="timer" role="timer" aria-label="Tempo restante"><i id="tbar" style="width:${(100 * left) / c.limit}%"></i><span id="tsec">${Math.ceil(left)} s</span></div>`;
 }
 function stopTimer() { if (TMR) clearInterval(TMR); TMR = null; }
 function runTimer() {
   const c = SH && SH.cur; stopTimer();
-  if (!c || store.timer === false || c.state === "done") return;
+  if (!c || store.timer !== true || c.state === "done") return;
   const tick = () => {
     if (!SH || SH.cur !== c || c.state === "done") return stopTimer();
     const left = Math.max(0, c.limit - (Date.now() - c.t0) / 1000);
@@ -2711,7 +2711,7 @@ function home() {
     <button class="tile feature" id="show"><span class="coins">R$ 1 mil → R$ 1 milhão</span><h2>Show da Vibração</h2>
       <p>16 perguntas, cada uma num mecanismo novo: carro, avião, drone, turbina, ponte, torre. Ache o erro, case figura e enunciado, acoplamentos e, a partir de R$ 300 mil, resposta digitada. Errou, leva a metade.</p>
       <span class="go">${ICON.play}Jogar</span></button>
-    <label class="tswitch" for="tmr" style="grid-column:1/-1"><span>Cronômetro<small>45 s até R$ 50 mil, 60 s até R$ 500 mil, 90 s no milhão e nas digitadas</small></span><input type="checkbox" id="tmr" ${store.timer === false ? "" : "checked"}></label>
+    <label class="tswitch" for="tmr" style="grid-column:1/-1"><span>Cronômetro<small>Desligado por padrão. Ligado: 1 min até R$ 5 mil, 2,5 min até R$ 50 mil, 5 min depois (dá para usar papel)</small></span><input type="checkbox" id="tmr" ${store.timer === true ? "checked" : ""}></label>
     <section class="tile"><h2>Mecanismo novo</h2><p>Um sistema que você nunca viu, com as 8 fases e respostas digitadas.</p>
       <div class="chiprow"><button class="chipbtn pri" data-gen="any">${ICON.dice} Sortear</button>${Object.keys(GEN).map((k) => `<button class="chipbtn" data-gen="${k}">${GEN_NAMES[k]}</button>`).join("")}</div></section>
     <section class="tile"><h2>Treino por fase</h2><p>12 itens seguidos da mesma fase, cada um de um mecanismo novo.</p><div class="chiprow">${drills}</div></section>
